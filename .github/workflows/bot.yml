@@ -3,7 +3,9 @@ name: Bot 24/7
 on:
   workflow_dispatch:          # qo'lda ishga tushirish: Actions → Bot 24/7 → Run workflow
   schedule:
-    - cron: "*/30 * * * *"    # zaxira: zanjir uzilib qolsa, botni qayta ishga tushiradi
+    # Har soatda navbatga yangi run qo'yiladi. Joriy run (~5.7 soat) tugashi bilan
+    # navbatdagisi avtomatik boshlanadi — shu bilan bot 24/7 ishlaydi.
+    - cron: "0 * * * *"
 
 # Bir vaqtda faqat bitta bot ishlasin (ikkitasi bir tokenda to'qnashadi)
 concurrency:
@@ -85,9 +87,11 @@ jobs:
           path: data
           key: botdata-${{ github.run_id }}
 
-      # Keyingi sessiyani FAQAT bot normal ishlab bo'lgandan keyin ishga tushirish
+      # Qo'shimcha: keyingi sessiyani darhol ishga tushirish (xato bersa — zarari yo'q,
+      # chunki navbatni cron to'ldiradi)
       - name: Keyingi sessiya
         if: success()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run bot.yml --ref ${{ github.ref_name }}
