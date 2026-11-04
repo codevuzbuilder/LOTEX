@@ -1,0 +1,93 @@
+name: Bot 24/7
+
+on:
+  workflow_dispatch:          # qo'lda ishga tushirish: Actions → Bot 24/7 → Run workflow
+  schedule:
+    - cron: "*/30 * * * *"    # zaxira: zanjir uzilib qolsa, botni qayta ishga tushiradi
+
+# Bir vaqtda faqat bitta bot ishlasin (ikkitasi bir tokenda to'qnashadi)
+concurrency:
+  group: bot-runner
+  cancel-in-progress: false
+
+permissions:
+  actions: write              # keyingi sessiyani o'zi ishga tushirishi uchun
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355      # GitHub bir ishga 6 soat beradi
+
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+      DB_PATH: data/bot.db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # 1) Secret'lar va token to'g'riligini tekshirish
+      - name: Sozlamalarni tekshirish
+        run: |
+          if [ -z "$BOT_TOKEN" ]; then
+            echo "::error::BOT_TOKEN secret topilmadi. Settings → Secrets and variables → Actions ga qo'shing."
+            exit 1
+          fi
+          if [ -z "$ADMIN_IDS" ]; then
+            echo "::warning::ADMIN_IDS secret bo'sh — admin panelga hech kim kira olmaydi."
+          fi
+          resp=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getMe")
+          if echo "$resp" | grep -q '"ok":true'; then
+            echo "Token to'g'ri: $(echo "$resp" | grep -o '"username":"[^"]*"')"
+          else
+            echo "::error::Telegram tokenni qabul qilmadi (BOT_TOKEN noto'g'ri yoki bekor qilingan)."
+            exit 1
+          fi
+
+      # 2) Kod importlarini tekshirish (fayl yetishmasa shu yerda qulaydi)
+      - name: Kodni tekshirish
+        run: python -c "import main; print('Importlar joyida')"
+
+      # Oldingi sessiyadan bazani tiklash
+      - uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: botdata-${{ github.run_id }}
+          restore-keys: botdata-
+
+      # 3) Botni ishga tushirish. 2 daqiqadan oldin to'xtasa — xato (qizil)
+      - name: Botni ishga tushirish (~5 soat 40 daqiqa)
+        run: |
+          start=$(date +%s)
+          set +e
+          timeout --signal=INT 20400 python -u main.py
+          code=$?
+          set -e
+          elapsed=$(( $(date +%s) - start ))
+          echo "Chiqish kodi: $code, ishlagan vaqt: ${elapsed}s"
+          if [ "$elapsed" -lt 120 ]; then
+            echo "::error::Bot ${elapsed} soniyada to'xtadi. Yuqoridagi log'dan xatoni qarang."
+            exit 1
+          fi
+
+      # Bazani saqlash (bot xato bilan to'xtasa ham)
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data
+          key: botdata-${{ github.run_id }}
+
+      # Keyingi sessiyani FAQAT bot normal ishlab bo'lgandan keyin ishga tushirish
+      - name: Keyingi sessiya
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml --ref ${{ github.ref_name }}
