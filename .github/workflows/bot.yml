@@ -1,0 +1,58 @@
+name: Bot 24/7
+
+on:
+  workflow_dispatch:          # qo'lda ishga tushirish: Actions → Bot 24/7 → Run workflow
+  schedule:
+    - cron: "*/30 * * * *"    # zaxira: zanjir uzilib qolsa, botni qayta ishga tushiradi
+
+# Bir vaqtda faqat bitta bot ishlasin (ikkitasi bir tokenda to'qnashadi)
+concurrency:
+  group: bot-runner
+  cancel-in-progress: false
+
+permissions:
+  actions: write              # keyingi sessiyani o'zi ishga tushirishi uchun
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355      # GitHub bir ishga 6 soat beradi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Oldingi sessiyadan bazani tiklash
+      - uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: botdata-${{ github.run_id }}
+          restore-keys: botdata-
+
+      - name: Botni ishga tushirish (~5 soat 40 daqiqa)
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          DB_PATH: data/bot.db
+        run: timeout --signal=INT 20400 python main.py || true
+
+      # Bazani saqlash
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data
+          key: botdata-${{ github.run_id }}
+
+      # Keyingi sessiyani darhol ishga tushirish
+      - name: Keyingi sessiya
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml --ref ${{ github.ref_name }}
